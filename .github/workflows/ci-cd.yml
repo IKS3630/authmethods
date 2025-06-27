@@ -1,0 +1,64 @@
+name: CI/CD DevSecOps - WebServices+
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Test Symfony App
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: 8.1
+        extensions: mbstring, xml, pdo_mysql
+        tools: composer
+
+    - name: Install Composer dependencies
+      run: composer install --no-progress --prefer-dist
+
+    - name: Static analysis (PHPStan)
+      run: vendor/bin/phpstan analyse src --level=max
+
+    - name: Security check (Symfony CLI or Security Checker)
+      run: |
+        if [ -f bin/console ]; then
+          php bin/console security:check
+        else
+          echo "Security checker not available in this version"
+        fi
+
+    - name: Run PHPUnit tests
+      run: ./vendor/bin/phpunit
+
+  deploy:
+    name: Deploy to Staging + DAST scan
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Deploy to Staging via rsync
+      env:
+        RSYNC_SSH_KEY: ${{ secrets.STAGING_SERVER_SSH_KEY }}
+      run: |
+        echo "$RSYNC_SSH_KEY" > key.pem
+        chmod 600 key.pem
+        rsync -avz -e "ssh -i key.pem -o StrictHostKeyChecking=no" ./ user@staging-server:/var/www/html
+        rm key.pem
+
+    - name: Run OWASP ZAP DAST scan
+      uses: zaproxy/action-full-scan@v0.8.0
+      with:
+        target: 'https://staging.webservices-plus.fr'
